@@ -1,0 +1,15 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: image-pull
+spec:
+  description: A container image cannot be pulled (ErrImagePull, ImagePullBackOff, "Back-off pulling image").
+  instructions: |
+    1. `pods_get` the pod and read the container's `image` and `state.waiting.message`. The message usually says which of these it is:
+       - `not found` / `manifest unknown`: the tag or digest does not exist. Check for a typo or a tag that was never pushed.
+       - `unauthorized` / `authentication required` / `denied`: the registry needs credentials. Check whether the pod or its ServiceAccount has `imagePullSecrets` (you cannot read the Secret itself).
+       - `no such host` / `i/o timeout` / `connection refused`: the node cannot reach the registry.
+       - `toomanyrequests`: registry rate limit.
+    2. Compare with the previous ReplicaSet's image: if the image changed in the latest rollout, that change is the likely cause.
+    3. Check whether other pods using the same registry pull fine (`pods_list_in_namespace`), which separates a bad image reference from a node or registry problem.
+    4. Next steps: the correct image reference, the pull secret to add, or the registry access to fix.

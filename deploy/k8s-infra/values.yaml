@@ -1,0 +1,41 @@
+# SigNoz k8s-infra collectors on kind. Chart: signoz/k8s-infra (version pinned in setup.sh).
+#
+# otel-agent (DaemonSet, one per node): container logs, kubelet + host metrics,
+#   and an OTLP receiver on hostPort 4317/4318 for app traces
+#   (apps send to http://$(HOST_IP):4317 using status.hostIP).
+# otel-deployment: cluster metrics and Kubernetes events (as logs).
+# Both export to the in-cluster SigNoz collector over OTLP/HTTP.
+global:
+  clusterName: kind-agent-sandbox
+  deploymentEnvironment: dev
+
+# The otlphttp exporter needs a scheme in the endpoint.
+otelCollectorEndpoint: http://main-ingester.signoz.svc.cluster.local:4318
+otelInsecure: true
+
+presets:
+  logsCollection:
+    enabled: true
+    # SigNoz's own pods stay excluded (blacklist.signozLogs defaults to true).
+  clusterMetrics:
+    enabled: true
+  k8sEvents:
+    enabled: true
+  kubernetesAttributes:
+    enabled: true
+
+otelAgent:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+otelDeployment:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi

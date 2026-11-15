@@ -1,0 +1,16 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: pending-pod
+spec:
+  description: A pod stays Pending because it cannot be scheduled (FailedScheduling).
+  instructions: |
+    1. Read the `FailedScheduling` event message from `events_list`. It summarises every node's reason, for example `0/3 nodes are available: 1 node(s) had untolerated taint, 2 Insufficient memory`.
+    2. Match each reason to the pod spec (`pods_get`):
+       - `Insufficient cpu/memory`: compare the pod's requests with node allocatable (`resources_get` kind Node) and with what other pods already request on those nodes.
+       - `untolerated taint`: the node taints versus the pod's tolerations.
+       - `didn't match Pod's node affinity/selector`: the pod's `nodeSelector` or affinity versus node labels.
+       - `unbound immediate PersistentVolumeClaims`: check the PVC (`resources_get` kind PersistentVolumeClaim) and its StorageClass.
+       - `didn't have free ports`: hostPort conflicts.
+    3. Check whether this started with a rollout (higher requests in the new ReplicaSet) or with node changes (a node NotReady or removed).
+    4. Next steps: lower requests, add capacity, fix the selector or toleration, or fix the volume claim, whichever the event points to.

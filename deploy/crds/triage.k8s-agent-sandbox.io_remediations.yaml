@@ -1,0 +1,294 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: remediations.triage.k8s-agent-sandbox.io
+spec:
+  group: triage.k8s-agent-sandbox.io
+  names:
+    kind: Remediation
+    listKind: RemediationList
+    plural: remediations
+    shortNames:
+    - rem
+    singular: remediation
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.incident
+      name: Incident
+      type: string
+    - jsonPath: .spec.target.name
+      name: Target
+      type: string
+    - jsonPath: .status.proposal.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Remediation is one remediation step for an incident: a sandboxed agent
+          proposes at most one action, and the executor performs it once allowed.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RemediationSpec is written by the coordinator, except Approval, which a
+              human with patch on remediations sets.
+            properties:
+              alert:
+                description: Alert is the SigNoz alert that started an incident.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  fingerprint:
+                    description: Fingerprint identifies the alert across notifications.
+                    type: string
+                  generatorURL:
+                    type: string
+                  labels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  startsAt:
+                    format: date-time
+                    type: string
+                required:
+                - fingerprint
+                type: object
+              approval:
+                description: Approval is set by a human for actions that need it.
+                enum:
+                - Approved
+                - Rejected
+                type: string
+              deadline:
+                description: Deadline for the agent's decision.
+                format: date-time
+                type: string
+              incident:
+                type: string
+              model:
+                type: string
+              report:
+                description: Report is the triage report, copied so the step does
+                  not depend on the run.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              serviceAccount:
+                type: string
+              skill:
+                description: |-
+                  RemediationSkillSpec is a remediation playbook and the actions it may
+                  propose. It is trusted: grant write on remediationskills only to the people
+                  who own remediation.
+                properties:
+                  allowedActions:
+                    items:
+                      description: RemediationAllowedAction is one action a skill
+                        permits.
+                      properties:
+                        constraints:
+                          description: RemediationActionConstraints bound where and
+                            how far an action may go.
+                          properties:
+                            maxReplicas:
+                              description: MaxReplicas caps scale.
+                              format: int32
+                              type: integer
+                            namespaces:
+                              description: |-
+                                Namespaces the action may touch, as globs ("shop-*"). Protected system
+                                namespaces are refused whatever this says.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - namespaces
+                          type: object
+                        type:
+                          description: RemediationAction is an action the remediation
+                            executor can perform.
+                          enum:
+                          - restart-pod
+                          - rollout-restart
+                          - scale
+                          - open-pr
+                          type: string
+                      required:
+                      - constraints
+                      - type
+                      type: object
+                    minItems: 1
+                    type: array
+                  approval:
+                    description: Approval overrides the per-action default (restarts
+                      auto, the rest required).
+                    enum:
+                    - auto
+                    - required
+                    type: string
+                  description:
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                  instructions:
+                    description: Instructions tell the remediation agent when each
+                      action is right.
+                    maxLength: 32768
+                    minLength: 1
+                    type: string
+                  match:
+                    additionalProperties:
+                      items:
+                        type: string
+                      type: array
+                    description: |-
+                      Match selects alerts by label, like TriageSkill.match. A skill without
+                      match is never chosen.
+                    type: object
+                required:
+                - allowedActions
+                - description
+                - instructions
+                type: object
+              skillName:
+                description: |-
+                  SkillName and Skill are the chosen RemediationSkill, copied so a later
+                  edit cannot change what this step may do.
+                type: string
+              suspend:
+                type: boolean
+              target:
+                description: |-
+                  Target is resolved by the coordinator from the alert; the run's Role is
+                  pinned to it and the executor acts on nothing else.
+                properties:
+                  kind:
+                    enum:
+                    - Pod
+                    - Deployment
+                    - StatefulSet
+                    - DaemonSet
+                    type: string
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                required:
+                - kind
+                - name
+                - namespace
+                type: object
+              triageRun:
+                description: TriageRun whose report this remediation acts on.
+                type: string
+            required:
+            - alert
+            - deadline
+            - incident
+            - model
+            - report
+            - serviceAccount
+            - skill
+            - skillName
+            - target
+            - triageRun
+            type: object
+          status:
+            description: RemediationStatus is written by the triage controller's remediation
+              module.
+            properties:
+              approvalMode:
+                description: ApprovalMode is "auto" or "required", from the skill.
+                type: string
+              executedAt:
+                format: date-time
+                type: string
+              finishedAt:
+                format: date-time
+                type: string
+              notified:
+                type: boolean
+              phase:
+                description: RemediationPhase is the state of one remediation step.
+                enum:
+                - Pending
+                - Running
+                - Proposed
+                - AwaitingApproval
+                - Succeeded
+                - NoAction
+                - Rejected
+                - Failed
+                type: string
+              proposal:
+                description: RemediationProposal is the action the agent proposed.
+                properties:
+                  action:
+                    description: RemediationAction is an action the remediation executor
+                      can perform.
+                    enum:
+                    - restart-pod
+                    - rollout-restart
+                    - scale
+                    - open-pr
+                    type: string
+                  rationale:
+                    maxLength: 4000
+                    type: string
+                  replicas:
+                    format: int32
+                    type: integer
+                required:
+                - action
+                - rationale
+                type: object
+              proposedAt:
+                description: ProposedAt starts the approval timeout.
+                format: date-time
+                type: string
+              result:
+                description: Result says what was done, or why nothing was.
+                type: string
+              sandbox:
+                type: string
+              startedAt:
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

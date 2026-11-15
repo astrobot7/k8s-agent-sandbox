@@ -1,0 +1,128 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: remediationskills.triage.k8s-agent-sandbox.io
+spec:
+  group: triage.k8s-agent-sandbox.io
+  names:
+    kind: RemediationSkill
+    listKind: RemediationSkillList
+    plural: remediationskills
+    shortNames:
+    - rskill
+    singular: remediationskill
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.description
+      name: Description
+      type: string
+    - jsonPath: .spec.approval
+      name: Approval
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: RemediationSkill is one remediation playbook.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RemediationSkillSpec is a remediation playbook and the actions it may
+              propose. It is trusted: grant write on remediationskills only to the people
+              who own remediation.
+            properties:
+              allowedActions:
+                items:
+                  description: RemediationAllowedAction is one action a skill permits.
+                  properties:
+                    constraints:
+                      description: RemediationActionConstraints bound where and how
+                        far an action may go.
+                      properties:
+                        maxReplicas:
+                          description: MaxReplicas caps scale.
+                          format: int32
+                          type: integer
+                        namespaces:
+                          description: |-
+                            Namespaces the action may touch, as globs ("shop-*"). Protected system
+                            namespaces are refused whatever this says.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                      required:
+                      - namespaces
+                      type: object
+                    type:
+                      description: RemediationAction is an action the remediation
+                        executor can perform.
+                      enum:
+                      - restart-pod
+                      - rollout-restart
+                      - scale
+                      - open-pr
+                      type: string
+                  required:
+                  - constraints
+                  - type
+                  type: object
+                minItems: 1
+                type: array
+              approval:
+                description: Approval overrides the per-action default (restarts auto,
+                  the rest required).
+                enum:
+                - auto
+                - required
+                type: string
+              description:
+                maxLength: 1024
+                minLength: 1
+                type: string
+              instructions:
+                description: Instructions tell the remediation agent when each action
+                  is right.
+                maxLength: 32768
+                minLength: 1
+                type: string
+              match:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: |-
+                  Match selects alerts by label, like TriageSkill.match. A skill without
+                  match is never chosen.
+                type: object
+            required:
+            - allowedActions
+            - description
+            - instructions
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

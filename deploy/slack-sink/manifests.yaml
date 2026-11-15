@@ -1,0 +1,86 @@
+# Slack stand-in for local testing. The triage controller posts reports to it
+# (Secret alert-triage/slack-webhook points SLACK_WEBHOOK_URL here); read them with:
+#   kubectl --context kind-agent-sandbox -n alert-triage port-forward svc/slack-sink 8090:8080
+#   open http://localhost:8090
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slack-sink
+  namespace: alert-triage
+  labels:
+    app.kubernetes.io/name: slack-sink
+spec:
+  replicas: 1 # messages are kept in memory
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slack-sink
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: slack-sink
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: slack-sink
+          image: slack-sink:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: slack-sink
+  namespace: alert-triage
+  labels:
+    app.kubernetes.io/name: slack-sink
+spec:
+  selector:
+    app.kubernetes.io/name: slack-sink
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Only the triage controller may post; the sink makes no outbound connections.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: slack-sink
+  namespace: alert-triage
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: slack-sink
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: triage-controller
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress: []

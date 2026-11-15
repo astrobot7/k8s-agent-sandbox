@@ -1,0 +1,278 @@
+# The coordinator moves each Incident through its steps and gives each step a
+# ServiceAccount, Role, and RoleBinding of its own, deleted when the step ends.
+# It is the only component that may create RBAC objects, and only:
+#   - in agent-sandboxes,
+#   - granting what it holds itself (triage-group permissions, below), and
+#   - in the shape the admission policy at the end of this file allows.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coordinator
+  namespace: alert-triage
+---
+# Incidents: the coordinator owns their status and deletes them after retention.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coordinator
+  namespace: alert-triage
+rules:
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [incidents]
+    verbs: [get, list, watch, delete]
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [incidents/status]
+    verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coordinator
+  namespace: alert-triage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coordinator
+subjects:
+  - kind: ServiceAccount
+    name: coordinator
+    namespace: alert-triage
+---
+# Steps and their identities. No list or watch on identities, no update or
+# patch (identities are immutable), and no escalate or bind: Kubernetes only
+# lets it bind a Role whose permissions it holds itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coordinator
+  namespace: agent-sandboxes
+rules:
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [triageruns, remediations]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [get, create, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coordinator
+  namespace: agent-sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coordinator
+subjects:
+  - kind: ServiceAccount
+    name: coordinator
+    namespace: alert-triage
+---
+# Everything a step identity can ever be granted. These permissions exist only
+# in the triage API group and are checked by our own services (triage
+# controller, llm-proxy, remediation executor) with SubjectAccessReview; none
+# of them reach the Kubernetes API. The coordinator must hold them to grant
+# them, and holds them only in agent-sandboxes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coordinator-grantable
+rules:
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [triageruns, remediations]
+    verbs: [get, update]
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [models]
+    verbs: [use]
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [pods, deployments, statefulsets, daemonsets]
+    verbs: [restart-pod, rollout-restart, scale, open-pr]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coordinator-grantable
+  namespace: agent-sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coordinator-grantable
+subjects:
+  - kind: ServiceAccount
+    name: coordinator
+    namespace: alert-triage
+---
+# The coordinator picks a RemediationSkill for each triaged incident. Reading
+# pods and workloads to find the remediation target is granted per namespace
+# open to remediation (deploy/remediation), not here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: remediation-skills-reader
+rules:
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [remediationskills]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coordinator-remediation-skills
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: remediation-skills-reader
+subjects:
+  - kind: ServiceAccount
+    name: coordinator
+    namespace: alert-triage
+---
+# Defense in depth: even with the coordinator's credentials, only step-shaped
+# identities can be created. The coordinator checks the same rules in Go
+# (internal/coordinator Identity.Allowed) before it sends anything.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: coordinator-step-identities
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [roles, rolebindings]
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [serviceaccounts]
+  matchConditions:
+    - name: by-coordinator
+      expression: request.userInfo.username == 'system:serviceaccount:alert-triage:coordinator'
+  variables:
+    - name: stepName
+      expression: object.metadata.name.startsWith('triage-') || object.metadata.name.startsWith('remediate-')
+  validations:
+    - expression: request.namespace == 'agent-sandboxes'
+      message: step identities live only in agent-sandboxes
+    - expression: variables.stepName
+      message: step identities are named triage-<run> or remediate-<run>
+    - expression: >-
+        request.kind.kind != 'Role' ||
+        (size(object.rules) > 0 && object.rules.all(r,
+          r.apiGroups == ['triage.k8s-agent-sandbox.io'] &&
+          has(r.resourceNames) && size(r.resourceNames) > 0 &&
+          !has(r.nonResourceURLs) &&
+          !('*' in r.verbs) && !('*' in r.resources) && !('*' in r.resourceNames)))
+      message: step roles grant only triage-group permissions, pinned by resourceNames, without wildcards
+    - expression: >-
+        request.kind.kind != 'RoleBinding' ||
+        (object.roleRef.kind == 'Role' && object.roleRef.name == object.metadata.name &&
+          size(object.subjects) == 1 && object.subjects[0].kind == 'ServiceAccount' &&
+          object.subjects[0].name == object.metadata.name &&
+          object.subjects[0].namespace == 'agent-sandboxes')
+      message: a step binding joins its own Role to its own ServiceAccount
+    - expression: >-
+        request.kind.kind != 'ServiceAccount' ||
+        (has(object.automountServiceAccountToken) && object.automountServiceAccountToken == false)
+      message: step service accounts never automount a Kubernetes API token
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: coordinator-step-identities
+spec:
+  policyName: coordinator-step-identities
+  validationActions: [Deny]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coordinator
+  namespace: alert-triage
+  labels:
+    app.kubernetes.io/name: coordinator
+spec:
+  replicas: 1 # no leader election; one coordinator at a time
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coordinator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coordinator
+    spec:
+      serviceAccountName: coordinator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: coordinator
+          image: coordinator:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: health
+              containerPort: 8081
+          env:
+            - name: INCIDENT_NAMESPACE
+              value: alert-triage
+            - name: SANDBOX_NAMESPACE
+              value: agent-sandboxes
+            - name: AGENT_MODEL # the only model a run's Role allows
+              value: claude-sonnet-5-5
+            - name: RUN_TIMEOUT
+              value: 15m
+            - name: RUN_GRACE
+              value: 2m
+            - name: MAX_CONCURRENT_RUNS
+              value: "2"
+            - name: INCIDENT_RETENTION
+              value: 24h
+            # After a successful triage, start a Remediation when a
+            # RemediationSkill matches. "false" stops after triage.
+            - name: REMEDIATION_ENABLED
+              value: "true"
+            - name: REMEDIATION_TIMEOUT # the remediation agent's time to decide
+              value: 10m
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+---
+# No ingress. Egress only to the API server, added by setup.sh
+# (allow-kube-apiserver-coordinator), since NetworkPolicy needs its IPs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coordinator
+  namespace: alert-triage
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: coordinator
+  policyTypes: [Ingress, Egress]

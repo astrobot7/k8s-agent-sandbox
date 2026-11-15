@@ -1,0 +1,14 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: probe-failures
+spec:
+  description: Liveness or readiness probes fail (Unhealthy events), causing restarts or pods dropping out of Service endpoints.
+  instructions: |
+    1. From the `Unhealthy` event messages, note which probe fails (liveness restarts the container; readiness only removes it from endpoints) and the failure text (`connection refused`, `timeout`, HTTP status code).
+    2. `pods_get` the pod and read the probe definition: path, port, `initialDelaySeconds`, `timeoutSeconds`, `periodSeconds`, `failureThreshold`.
+       - `connection refused` early in startup: the app is not listening yet; the initial delay is too short or a startupProbe is missing, or the port is wrong.
+       - `timeout`: the endpoint is slow. Check CPU usage against the limit (`signoz_query_metrics`) and slow requests at that time (`signoz_search_traces`).
+       - HTTP 5xx from the health endpoint: the app reports itself unhealthy; read `pods_log` around the failures for the dependency it checks.
+    3. Liveness failures that restart a container under load often make an outage worse; say so if the evidence shows it.
+    4. Next steps: fix the port or path, adjust timings, add a startupProbe, or fix the dependency the health check reports.

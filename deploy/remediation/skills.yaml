@@ -1,0 +1,28 @@
+# Starter RemediationSkill. Skills are trusted: they decide which actions an
+# agent may propose and whether a human must approve them. Grant write on
+# remediationskills only to the people who own remediation.
+#
+# The coordinator picks the first skill (by name) whose match selects the
+# alert and that allows an action on the alert's workload.
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: RemediationSkill
+metadata:
+  name: workload-recovery
+spec:
+  description: Restart or scale a workload whose pods fail, after triage found the cause.
+  match:
+    alertname: ["K8s warning events"]
+  # No approval override: restarts run automatically, scale waits for a human.
+  allowedActions:
+    - type: rollout-restart
+      constraints: { namespaces: [workloads] }
+    - type: restart-pod
+      constraints: { namespaces: [workloads] }
+    - type: scale
+      constraints: { namespaces: [workloads], maxReplicas: 3 }
+  instructions: |
+    Choose from the triage report's likely cause:
+    - Restart (rollout-restart for a Deployment, StatefulSet, or DaemonSet; restart-pod for a bare Pod) only when the failure is transient and a fresh start is likely to succeed: a dependency that was down and is back (check that its Service has ready endpoints now), a hung process, leaked connections or file handles, a stuck lock.
+    - Do not restart for configuration errors (a wrong env var or DB host, a missing ConfigMap key or Secret), a missing image, OOMKilled with an unchanged limit, or a code bug that crashes on start. A restart repeats the same crash. Call no_action and name the change a human must make (the variable, the image tag, the limit).
+    - Scale only when the evidence shows load: CPU or latency high across all replicas, a queue backing up, pods healthy but saturated. Never scale a crashlooping workload; more replicas crash the same way.
+    - If the report's confidence is low, prefer no_action and say what evidence would change the decision.

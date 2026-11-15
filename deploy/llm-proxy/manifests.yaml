@@ -1,0 +1,159 @@
+# LLM proxy: holds the Anthropic API key (Secret llm-proxy/anthropic-api-key, created by you)
+# and forwards policy-checked Messages API calls from sandboxed agents via the egress gateway.
+# Agents reach it at http://llm-proxy.llm-proxy.svc.cluster.local:8080 and authenticate
+# with their ServiceAccount token; RBAC decides which models they may use.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-proxy
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llm-proxy
+  namespace: llm-proxy
+---
+# TokenReview and SubjectAccessReview: verify callers and check RBAC "use" on models.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: llm-proxy-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: llm-proxy
+    namespace: llm-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-proxy
+  namespace: llm-proxy
+  labels:
+    app.kubernetes.io/name: llm-proxy
+spec:
+  replicas: 1
+  # The extra component label keeps setup.sh probe pods (which only carry the
+  # name label, to get the same NetworkPolicy) from being adopted by this Deployment.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-proxy
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-proxy
+        app.kubernetes.io/component: server
+    spec:
+      serviceAccountName: llm-proxy # needs its API token for TokenReview/SubjectAccessReview
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: llm-proxy
+          image: llm-proxy:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ANTHROPIC_API_KEY # required unless UPSTREAM_API=openai (local LLM)
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic-api-key
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            # Which models a caller may use is RBAC: verb "use" on
+            # triage.k8s-agent-sandbox.io/models (see deploy/triage, Role triage-agent).
+            - name: MAX_TOKENS
+              value: "8192"
+            - name: MAX_INFLIGHT
+              value: "8"
+            - name: HTTPS_PROXY
+              value: http://egress-gateway.egress.svc.cluster.local:3128
+            - name: NO_PROXY
+              value: localhost,127.0.0.1,.svc,.cluster.local,10.0.0.0/8
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-proxy
+  namespace: llm-proxy
+  labels:
+    app.kubernetes.io/name: llm-proxy
+spec:
+  selector:
+    app.kubernetes.io/name: llm-proxy
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Only sandboxed agents may call the proxy; the proxy may only reach DNS and the egress gateway.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-proxy
+  namespace: llm-proxy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llm-proxy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agent-sandboxes
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: triage-agent
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: egress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: egress-gateway
+      ports:
+        - { protocol: TCP, port: 3128 }

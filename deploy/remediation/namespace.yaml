@@ -1,0 +1,65 @@
+# Opens one namespace to remediation. setup.sh applies this once per entry in
+# REMEDIATION_NAMESPACES, replacing __NAMESPACE__. Without it the coordinator
+# cannot resolve targets there and the executor cannot act there.
+#
+# Read: the coordinator follows Pod -> ReplicaSet -> Deployment (or
+# StatefulSet/DaemonSet) to find the workload an alert is about.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remediation-target-reader
+  namespace: __NAMESPACE__
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [replicasets, deployments, statefulsets, daemonsets]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coordinator-remediation-target-reader
+  namespace: __NAMESPACE__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: remediation-target-reader
+subjects:
+  - kind: ServiceAccount
+    name: coordinator
+    namespace: alert-triage
+---
+# Write: exactly what the executor's drivers need (internal/remediation/actions):
+# restart-pod deletes a pod, rollout-restart patches the pod template,
+# scale updates the scale subresource. Nothing else, and nowhere else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remediation-executor
+  namespace: __NAMESPACE__
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [patch]
+  - apiGroups: [apps]
+    resources: [deployments/scale, statefulsets/scale]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: triage-controller-remediation-executor
+  namespace: __NAMESPACE__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: remediation-executor
+subjects:
+  - kind: ServiceAccount
+    name: triage-controller
+    namespace: alert-triage
