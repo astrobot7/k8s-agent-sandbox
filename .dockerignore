@@ -1,0 +1,7 @@
+.git
+.cache
+.claude
+docs
+deploy
+hack
+*.md

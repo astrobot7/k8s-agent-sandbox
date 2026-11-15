@@ -31,3 +31,16 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Claude Code personal memory
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Downloaded tool binaries (gVisor for kind nodes)
+.cache/
+
+# demo recordings (hack/demo/remediation-demo.tape)
+hack/demo/out/
+
+# macOS
+.DS_Store

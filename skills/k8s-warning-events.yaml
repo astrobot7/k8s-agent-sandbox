@@ -1,0 +1,22 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: k8s-warning-events
+spec:
+  description: Entry point for the "K8s warning events" alert. Identifies the failing object and picks the specific skill to follow.
+  match:
+    alertname: ["K8s warning events"]
+  instructions: |
+    The alert groups Kubernetes warning events by object. Its labels name the object:
+    `k8s.namespace.name`, `k8s.object.kind`, `k8s.object.name`.
+
+    1. Get the object with `resources_get` (or `pods_get` for a Pod). Note its owner (ReplicaSet, Deployment, StatefulSet, Job) so you can describe impact at the workload level.
+    2. List recent events for the namespace with `events_list` and keep the ones about this object and its owner. The `reason` field tells you which skill applies:
+       - `BackOff` on a container that started before: read the `crashloopbackoff` skill.
+       - `BackOff` with "pulling image", or `Failed` with ErrImagePull: read `image-pull`.
+       - `OOMKilling`, or a container whose last state is `OOMKilled`: read `oomkilled`.
+       - `FailedScheduling`: read `pending-pod`.
+       - `Unhealthy` (liveness or readiness probe failed): read `probe-failures`.
+       - `FailedMount` or `FailedAttachVolume`: read `volume-mount`.
+    3. If several reasons appear, start with the earliest one; later events are often consequences.
+    4. Report impact: how many replicas are affected, and whether the workload still has ready replicas.

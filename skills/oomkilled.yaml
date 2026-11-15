@@ -1,0 +1,15 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: oomkilled
+spec:
+  description: A container was killed for exceeding its memory limit (OOMKilled, exit code 137, OOMKilling node events).
+  instructions: |
+    1. `pods_get` the pod: confirm `lastState.terminated.reason: OOMKilled` and read the container's `resources.limits.memory` and `requests.memory`.
+    2. Use SigNoz metrics to see the memory curve before each kill: `signoz_query_metrics` for the container's memory usage (`container.memory.working_set` or `k8s.pod.memory.working_set`) filtered by `k8s.pod.name` or `k8s.deployment.name`, over the last few hours.
+       - Steady climb to the limit: a leak, or a cache without a bound.
+       - Sudden spike: one large request or batch.
+       - Flat but close to the limit since the last deploy: the limit is too low for the new version.
+    3. Check what changed: a new image or a lower limit in the latest ReplicaSet (`resources_list` ReplicaSets for the Deployment).
+    4. If the event is `OOMKilling` on a node (the kernel, not the container's cgroup), the node itself ran out of memory: check other pods on that node and node allocatable memory with `resources_get` kind Node.
+    5. Next steps: the limit to set (based on the observed peak plus headroom), or the code path to profile if usage grows without bound.

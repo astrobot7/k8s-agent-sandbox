@@ -1,0 +1,29 @@
+# Lean single-node variant of cluster.yaml for laptops with little memory
+# (PROFILE=lean ./setup.sh). Same Calico networking and gVisor runtime; the
+# control plane also runs workloads (setup.sh removes its NoSchedule taint).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: agent-sandbox
+
+networking:
+  disableDefaultCNI: true
+  podSubnet: 10.244.0.0/16
+
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+      runtime_type = "io.containerd.runsc.v1"
+
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraMounts:
+      - hostPath: ./.cache/gvisor/runsc
+        containerPath: /usr/local/bin/runsc
+        readOnly: true
+      - hostPath: ./.cache/gvisor/containerd-shim-runsc-v1
+        containerPath: /usr/local/bin/containerd-shim-runsc-v1
+        readOnly: true
+      - hostPath: ./.cache/gvisor/gvisor-bin
+        containerPath: /usr/local/bin/gvisor-bin
+        readOnly: true

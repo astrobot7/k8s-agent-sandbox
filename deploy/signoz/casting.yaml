@@ -1,0 +1,43 @@
+# SigNoz installed with Foundry (foundryctl, version pinned in setup.sh), as
+# plain Kubernetes manifests (flavor: kustomize). Kustomize, not Helm, because
+# Foundry's Helm flavor only supports ZooKeeper, and ClickHouse Keeper needs no JVM.
+#
+# Resources are named after metadata.name: main-signoz (UI/API :8080),
+# main-ingester (OTLP :4317/:4318), ClickHouse and ClickHouse Keeper via the
+# Altinity operator.
+apiVersion: v1alpha1
+kind: Installation
+metadata:
+  name: main
+  annotations:
+    foundry.signoz.io/kubernetes-namespace: signoz
+spec:
+  deployment:
+    flavor: kustomize
+    mode: kubernetes
+  signoz:
+    spec:
+      image: signoz/signoz:v0.150.0
+  ingester:
+    spec:
+      # The collector is versioned separately; v0.144.15 shipped with SigNoz 0.150.0.
+      image: signoz/signoz-otel-collector:v0.144.15
+  telemetrykeeper:
+    kind: clickhousekeeper
+  metastore:
+    kind: sqlite # single node; use postgres for anything shared
+  patches:
+    # Keeper defaults to 1 CPU / 1Gi and trace logging; far more than one node needs.
+    - target: deployment/telemetrykeeper/clickhousekeeper/clickhousekeeperinstallation.yaml
+      operations:
+        - op: replace
+          path: /spec/templates/podTemplates/0/spec/containers/0/resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+        - op: replace
+          path: /spec/configuration/settings/logger~1level
+          value: information

@@ -1,0 +1,58 @@
+# Demo failure for `./setup.sh demo`: a "payments" API that crashes on startup
+# because its database host does not resolve. Kubernetes emits BackOff events,
+# the SigNoz rule fires, and a triage run starts.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: workloads
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: workloads
+  labels:
+    app.kubernetes.io/name: payments-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payments-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payments-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: busybox:1.37.0
+          env:
+            - name: DB_HOST
+              value: payments-db.workloads.svc.cluster.local
+          command:
+            - sh
+            - -c
+            - |
+              echo "level=info msg=\"starting payments-api\" version=2.4.1"
+              echo "level=info msg=\"connecting to database\" host=$DB_HOST port=5432"
+              if ! nslookup "$DB_HOST" >/dev/null 2>&1; then
+                echo "level=error msg=\"database connection failed\" err=\"lookup $DB_HOST: no such host\""
+                exit 1
+              fi
+              sleep 3600
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi

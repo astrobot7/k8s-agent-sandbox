@@ -1,0 +1,17 @@
+# Calico, installed by the Tigera operator (version pinned in setup.sh). Calico
+# replaces kindnet because kindnet does not enforce egress NetworkPolicies.
+# The pool must match networking.podSubnet in deploy/kind/cluster.yaml and must
+# not overlap the Docker network kind nodes run on (OrbStack uses 192.168.97.0/24).
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+      - name: default-ipv4-ippool
+        blockSize: 26
+        cidr: 10.244.0.0/16
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()

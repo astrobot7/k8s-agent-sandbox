@@ -1,0 +1,24 @@
+# PROFILE=lean overrides, applied on top of values.yaml. Keeps container logs,
+# Kubernetes events, and kubelet/cluster metrics (the triage skills use them);
+# drops host metrics and collects less often.
+presets:
+  hostMetrics:
+    enabled: false
+  clusterMetrics:
+    collectionInterval: 60s
+
+otelAgent:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+otelDeployment:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

@@ -1,0 +1,42 @@
+# kind cluster for alert triage: 1 control plane, 2 workers, gVisor on every node.
+#
+# gVisor binaries are downloaded to .cache/gvisor by hack/install-gvisor.sh and
+# mounted into each node. containerd registers them as the "runsc" handler,
+# which the "gvisor" RuntimeClass (runtimeclass.yaml) points at.
+#
+# Create with `make kind-up` (run from the repo root so the relative hostPaths resolve).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: agent-sandbox
+
+# Calico (deploy/calico) replaces kindnet, which does not enforce egress
+# NetworkPolicies. Nodes stay NotReady until `./setup.sh cni` installs it.
+networking:
+  disableDefaultCNI: true
+  podSubnet: 10.244.0.0/16
+
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+      runtime_type = "io.containerd.runsc.v1"
+
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraMounts: &gvisor
+      - hostPath: ./.cache/gvisor/runsc
+        containerPath: /usr/local/bin/runsc
+        readOnly: true
+      - hostPath: ./.cache/gvisor/containerd-shim-runsc-v1
+        containerPath: /usr/local/bin/containerd-shim-runsc-v1
+        readOnly: true
+      # Sidecars (gvisor_sentry etc.) must sit next to runsc, or runsc tries to download them.
+      - hostPath: ./.cache/gvisor/gvisor-bin
+        containerPath: /usr/local/bin/gvisor-bin
+        readOnly: true
+  - role: worker
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraMounts: *gvisor
+  - role: worker
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraMounts: *gvisor

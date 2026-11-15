@@ -1,0 +1,14 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: service-errors-latency
+spec:
+  description: A service's error rate or latency is up (trace- or log-based alerts on service.name), with or without Kubernetes events.
+  instructions: |
+    1. From the alert labels take `service.name` (and `k8s.namespace.name` if present). Read the alert's history with `signoz_get_alert_history` to see when it started.
+    2. Find what fails or is slow:
+       - `signoz_search_traces` for the service with errors or high duration in the alert window.
+       - Open two or three representative traces with `signoz_get_trace_details`. Find the span where the error or the time originates; often it is a downstream call (database, another service, an external API), not the service itself.
+    3. Correlate with logs: `signoz_search_logs` for the service at the same time, filtered to errors. Quote the error lines.
+    4. Check for a change: a rollout of this service or of the downstream service just before the start time (`resources_list` ReplicaSets, pod start times), or a dependency that is down (its pods not ready, events in its namespace).
+    5. Report the failing operation, the downstream component, the start time, and the change that lines up with it. Include trace webUrl links as evidence.

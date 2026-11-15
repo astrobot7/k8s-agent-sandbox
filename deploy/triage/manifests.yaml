@@ -1,0 +1,335 @@
+# Triage controller, sandbox namespace, and the network policies that box the agent in.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: alert-triage
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-sandboxes
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: triage-controller
+  namespace: alert-triage
+---
+# Sandboxes have no shared identity. The coordinator (deploy/coordinator)
+# creates a ServiceAccount, Role, and RoleBinding per run, pinned to that run,
+# and deletes them when the run ends.
+# The controller runs TriageRuns and Remediations (it writes only their
+# status), manages their Sandboxes, and reads pods to map a caller's token to
+# its run, only in agent-sandboxes. It cannot create or change RBAC objects or
+# ServiceAccounts. Its remediation executor may change workloads only in
+# namespaces open to remediation (deploy/remediation).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: triage-controller
+  namespace: agent-sandboxes
+rules:
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [triageruns, remediations]
+    verbs: [get, list, watch]
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [triageruns/status, remediations/status]
+    verbs: [update]
+---
+# Intake: the controller turns webhooks into Incidents. The coordinator owns
+# their status.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: triage-controller-intake
+  namespace: alert-triage
+rules:
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [incidents]
+    verbs: [create, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: triage-controller-intake
+  namespace: alert-triage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: triage-controller-intake
+subjects:
+  - kind: ServiceAccount
+    name: triage-controller
+    namespace: alert-triage
+---
+# TokenReview and SubjectAccessReview, to verify agents.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: triage-controller-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: triage-controller
+    namespace: alert-triage
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: triage-controller
+  namespace: agent-sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: triage-controller
+subjects:
+  - kind: ServiceAccount
+    name: triage-controller
+    namespace: alert-triage
+---
+# The controller reads TriageSkills (cluster-scoped) to hand them to agents.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: triage-skills-reader
+rules:
+  - apiGroups: [triage.k8s-agent-sandbox.io]
+    resources: [triageskills]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: triage-controller-skills
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: triage-skills-reader
+subjects:
+  - kind: ServiceAccount
+    name: triage-controller
+    namespace: alert-triage
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: triage-controller
+  namespace: alert-triage
+  labels:
+    app.kubernetes.io/name: triage-controller
+spec:
+  replicas: 1 # webhook dedup is serialized in process; do not scale out
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: triage-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: triage-controller
+    spec:
+      serviceAccountName: triage-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: triage-controller:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: INCIDENT_NAMESPACE
+              value: alert-triage
+            - name: SANDBOX_NAMESPACE
+              value: agent-sandboxes
+            - name: AGENT_IMAGE
+              value: triage-agent:dev
+            - name: RUNTIME_CLASS
+              value: gvisor
+            - name: CONTROLLER_URL
+              value: http://triage-controller.alert-triage.svc.cluster.local:8080
+            - name: MCP_ENDPOINTS
+              value: http://signoz-mcp.mcp-gateway.svc.cluster.local:8000/mcp,http://k8s-mcp.mcp-gateway.svc.cluster.local:8080/mcp
+            - name: LLM_BASE_URL
+              value: http://llm-proxy.llm-proxy.svc.cluster.local:8080
+            # Outbound HTTPS (Slack) goes through the egress gateway; cluster traffic does not.
+            - name: HTTPS_PROXY
+              value: http://egress-gateway.egress.svc.cluster.local:3128
+            - name: NO_PROXY
+              value: localhost,127.0.0.1,.svc,.cluster.local,10.0.0.0/8
+            # Run timeout, concurrency, and model are the coordinator's settings.
+            - name: DEDUP_WINDOW
+              value: 30m
+            # Remediation module. REMEDIATION_MODE is the kill switch:
+            # live performs actions, dry-run records them, off rejects them.
+            - name: REMEDIATION_ENABLED
+              value: "true"
+            - name: REMEDIATION_MODE
+              value: live
+            - name: APPROVAL_TIMEOUT # a proposal nobody approves is rejected
+              value: 1h
+            - name: REMEDIATION_COOLDOWN # at most one action per target in this window
+              value: 30m
+            - name: SLACK_WEBHOOK_URL # optional: kubectl -n alert-triage create secret generic slack-webhook --from-literal=url=...
+              valueFrom:
+                secretKeyRef:
+                  name: slack-webhook
+                  key: url
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: triage-controller
+  namespace: alert-triage
+  labels:
+    app.kubernetes.io/name: triage-controller
+spec:
+  selector:
+    app.kubernetes.io/name: triage-controller
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Sandboxed agents: no inbound traffic; outbound only to DNS, the controller,
+# the two MCP servers, and the llm-proxy. No internet access at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: triage-agent
+  namespace: agent-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: triage-agent
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: alert-triage
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: triage-controller
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp-gateway
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: signoz-mcp
+      ports:
+        - { protocol: TCP, port: 8000 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp-gateway
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: k8s-mcp
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llm-proxy
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: llm-proxy
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+# MCP servers accept MCP traffic only from sandboxed agents.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-from-agents-only
+  namespace: mcp-gateway
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [signoz-mcp, k8s-mcp] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agent-sandboxes
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: triage-agent
+---
+# The controller accepts webhooks from SigNoz and agent calls from sandboxes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: triage-controller-ingress
+  namespace: alert-triage
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: triage-controller
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: signoz
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agent-sandboxes
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: triage-agent
+      ports:
+        - { protocol: TCP, port: 8080 }

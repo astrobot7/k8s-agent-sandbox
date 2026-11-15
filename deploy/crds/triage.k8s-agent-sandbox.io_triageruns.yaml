@@ -1,0 +1,143 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: triageruns.triage.k8s-agent-sandbox.io
+spec:
+  group: triage.k8s-agent-sandbox.io
+  names:
+    kind: TriageRun
+    listKind: TriageRunList
+    plural: triageruns
+    shortNames:
+    - tr
+    singular: triagerun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.incident
+      name: Incident
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.sandbox
+      name: Sandbox
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: TriageRun is one sandboxed triage of an incident's alert.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TriageRunSpec is written only by the coordinator.
+            properties:
+              alert:
+                description: Alert is the SigNoz alert that started an incident.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  fingerprint:
+                    description: Fingerprint identifies the alert across notifications.
+                    type: string
+                  generatorURL:
+                    type: string
+                  labels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  startsAt:
+                    format: date-time
+                    type: string
+                required:
+                - fingerprint
+                type: object
+              deadline:
+                description: Deadline after which the triage controller fails the
+                  run.
+                format: date-time
+                type: string
+              incident:
+                description: Incident is the name of the owning Incident in the controller
+                  namespace.
+                type: string
+              model:
+                description: Model the agent asks the llm-proxy for; the run's Role
+                  allows only this one.
+                type: string
+              serviceAccount:
+                description: |-
+                  ServiceAccount the sandbox runs as. The coordinator creates it with a
+                  Role pinned to this run and deletes it when the run ends.
+                type: string
+              suspend:
+                description: Suspend holds the run until the coordinator has provisioned
+                  its identity.
+                type: boolean
+            required:
+            - alert
+            - deadline
+            - incident
+            - model
+            - serviceAccount
+            type: object
+          status:
+            description: TriageRunStatus is written only by the triage controller.
+            properties:
+              error:
+                type: string
+              finishedAt:
+                format: date-time
+                type: string
+              notified:
+                description: Notified is set once the result was posted to on-call.
+                type: boolean
+              phase:
+                description: TriageRunPhase is the state of one triage step.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              report:
+                description: Report is the agent's validated triage report.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              sandbox:
+                type: string
+              startedAt:
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

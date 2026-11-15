@@ -1,0 +1,13 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: volume-mount
+spec:
+  description: A pod cannot start because a volume fails to mount or attach (FailedMount, FailedAttachVolume).
+  instructions: |
+    1. Read the event message: it names the volume and the reason (`not found`, `timed out waiting for the condition`, `Multi-Attach error`, permission errors).
+    2. `pods_get` the pod and find the volume in `spec.volumes`:
+       - Secret or ConfigMap volume `not found`: the referenced object does not exist in the namespace. You cannot read Secrets or ConfigMaps, but the event confirms the missing name. Check whether a recent rollout renamed it.
+       - PersistentVolumeClaim: `resources_get` the PVC; check `status.phase`, its StorageClass, and the bound PersistentVolume.
+       - `Multi-Attach error`: a ReadWriteOnce volume is still attached to another node, typically during a rollout or after a node failure. Find the other pod using the claim.
+    3. Next steps: create or fix the referenced object, fix the claim, or scale the old pod down so the volume can move.

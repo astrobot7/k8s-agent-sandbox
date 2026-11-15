@@ -1,0 +1,68 @@
+# TriageSkill: one triage playbook for the sandboxed agent.
+# The triage controller lists these when an agent fetches its assignment, so a
+# new or changed skill applies from the next run. Skills are trusted
+# instructions to the agent: grant create/update on triageskills only to the
+# people who own triage.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: triageskills.triage.k8s-agent-sandbox.io
+spec:
+  group: triage.k8s-agent-sandbox.io
+  scope: Cluster
+  names:
+    kind: TriageSkill
+    listKind: TriageSkillList
+    plural: triageskills
+    singular: triageskill
+    shortNames: [tskill]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Description
+          type: string
+          jsonPath: .spec.description
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          x-kubernetes-validations:
+            - rule: "self.metadata.name.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')"
+              message: "name must be 1-63 chars of a-z, 0-9, and inner hyphens (no dots)"
+          properties:
+            spec:
+              type: object
+              required: [description, instructions]
+              properties:
+                description:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+                  description: >-
+                    One line saying which problem the skill covers. The agent sees every
+                    skill's description and uses it to decide which skill to read.
+                match:
+                  type: object
+                  maxProperties: 10
+                  description: >-
+                    Optional. Alert labels that make this skill apply automatically: every
+                    key must be present with one of the listed values (globs like "Back*"
+                    allowed). Matching skills are put straight into the agent's prompt.
+                  additionalProperties:
+                    type: array
+                    minItems: 1
+                    maxItems: 20
+                    items:
+                      type: string
+                      minLength: 1
+                      maxLength: 256
+                instructions:
+                  type: string
+                  minLength: 1
+                  maxLength: 32768
+                  description: The playbook, in Markdown. Name the tools the agent should call.

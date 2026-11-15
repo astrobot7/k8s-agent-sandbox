@@ -1,0 +1,30 @@
+# Pod used by `make kind-verify` to confirm gVisor works on the workers.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gvisor-smoke-test
+  namespace: default
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  containers:
+    - name: probe
+      image: busybox:1.37.0
+      command: ["sh", "-c", "dmesg"]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi

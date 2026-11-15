@@ -1,0 +1,18 @@
+apiVersion: triage.k8s-agent-sandbox.io/v1alpha1
+kind: TriageSkill
+metadata:
+  name: crashloopbackoff
+spec:
+  description: A container keeps exiting and restarting (CrashLoopBackOff, BackOff "restarting failed container").
+  instructions: |
+    1. `pods_get` the pod. For each container read `restartCount`, `state`, and `lastState.terminated` (`reason`, `exitCode`, `finishedAt`).
+       - `reason: OOMKilled` or exit code 137: switch to the `oomkilled` skill.
+       - Exit code 1 or another application code: the process failed on its own; continue below.
+       - Exit code 0 with restarts: the process exits normally but the pod expects it to keep running (wrong command, a one-shot script in a Deployment).
+    2. `pods_log` with `previous: true` for the crashing container. The last lines before exit usually name the cause. Quote them exactly.
+    3. Common causes and what to check:
+       - Missing or wrong configuration: an env var, file, or flag named in the error. Compare the container spec (env, args, volume mounts) with what the log asks for. You cannot read Secrets or ConfigMaps; say which key the evidence points to.
+       - A dependency it cannot reach: DNS names that do not resolve, connection refused, timeouts. Check whether that Service exists (`resources_get` kind Service) and has endpoints.
+       - A bad rollout: compare the pod's image and the ReplicaSet with the previous one (`resources_list` ReplicaSets for the Deployment). A crash that started right after a new revision points at that change.
+    4. In SigNoz, `signoz_search_logs` for the pod or service around the first restart to find errors the container log rotated away, and check when the first failure happened.
+    5. Next steps should say exactly what to change (the variable, the image tag, the missing Service) or how to roll back (`kubectl rollout undo deployment/<name>`).
